@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SLZoom - Rust 화상회의 & XWhisper AI 회의록</title>
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polygon points="23 7 16 12 23 17 23 7"></polygon>
+        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+      </svg>
+      SLZoom
+      <span class="badge-live">XWhisper STT Engine Active</span>
+    </div>
+    <div class="nav-actions">
+      <span id="room-code-display" style="font-weight:600; color:var(--text-secondary);">회의실: 미입장</span>
+      <button id="btn-copy-code" class="btn" style="display:none;">📋 ID 복사</button>
+      <button id="btn-new-room" class="btn btn-primary">➕ 새 회의 만들기</button>
+      <button id="btn-join-room" class="btn">🔑 입장하기</button>
+      <button id="btn-gen-minutes" class="btn btn-primary" style="display:none;">✨ XWhisper 회의록 생성 & .md 다운로드</button>
+    </div>
+  </header>
+
+  <!-- App Workspace -->
+  <div class="app-container">
+    <!-- Video Stage -->
+    <div class="video-stage">
+      <div id="video-grid" class="video-grid">
+        <!-- Local User Video Tile -->
+        <div class="video-tile" id="tile-local">
+          <video id="local-video" autoplay playsinline muted></video>
+          <div class="speaker-tag">
+            <span id="local-user-label">나 (호스트)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Control Bar -->
+      <div class="control-bar">
+        <button id="btn-toggle-mic" class="btn btn-icon" title="마이크 On/Off">🎙️</button>
+        <button id="btn-toggle-cam" class="btn btn-icon" title="카메라 On/Off">📷</button>
+        <button id="btn-screen-share" class="btn btn-icon" title="화면 공유">🖥️</button>
+        <button id="btn-toggle-chat" class="btn btn-icon" title="자막/채팅 패널">💬</button>
+        <button id="btn-leave-room" class="btn btn-danger" title="나가기">🛑 종료</button>
+      </div>
+    </div>
+
+    <!-- Sidebar: XWhisper Live Transcript & Chat -->
+    <div id="sidebar" class="sidebar">
+      <div class="sidebar-tabs">
+        <button id="tab-transcript" class="tab-btn active">🎙️ XWhisper 실시간 자막</button>
+        <button id="tab-chat" class="tab-btn">💬 채팅</button>
+      </div>
+
+      <div id="panel-transcript" class="tab-content">
+        <div class="transcript-card" style="border-left: 3px solid var(--accent-primary);">
+          <div class="transcript-header">
+            <span class="transcript-speaker">시스템</span>
+            <span>방금 전</span>
+          </div>
+          <div class="transcript-body">
+            XWhisper 실시간 음성 인식 엔진이 연결되었습니다. 마이크 발언 시 16kHz PCM 스트림으로 실시간 자막이 생성됩니다.
+          </div>
+        </div>
+      </div>
+
+      <div id="panel-chat" class="tab-content hidden">
+        <div id="chat-messages" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px;"></div>
+        <div style="display:flex; gap:8px; margin-top:8px;">
+          <input type="text" id="chat-input" placeholder="메시지 입력..." style="flex:1; padding:10px; background:rgba(255,255,255,0.05); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+          <button id="btn-send-chat" class="btn btn-primary">전송</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AI Meeting Minutes Modal -->
+  <div id="minutes-modal" class="modal-overlay hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="minutes-modal-title">✨ XWhisper 회의록 생성 완료</h3>
+        <button id="btn-close-modal" class="btn" style="padding:4px 10px;">✕</button>
+      </div>
+      <div class="modal-body" id="minutes-modal-body">
+        <div class="minutes-section">
+          <h4>📝 회의 요약</h4>
+          <p id="minutes-summary">생성 중...</p>
+        </div>
+        <div class="minutes-section">
+          <h4>📌 주요 논의 사항</h4>
+          <ul id="minutes-discussions" style="padding-left:20px; line-height:1.6;"></ul>
+        </div>
+        <div class="minutes-section">
+          <h4>🎯 액션 아이템 (Action Items)</h4>
+          <ul id="minutes-actions" style="padding-left:20px; line-height:1.6;"></ul>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-download-md" class="btn btn-primary">📥 .md 파일 다운로드</button>
+        <button id="btn-close-modal-footer" class="btn">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/audio_streamer.js"></script>
+  <script src="/js/webrtc.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>
