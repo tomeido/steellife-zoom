@@ -25,7 +25,6 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<WsMessage>();
 
-    // Forward MPSC messages back to the WebSocket client
     let send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Ok(json) = serde_json::to_string(&msg) {
@@ -68,7 +67,6 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 .or_insert_with(|| Arc::new(RoomSession::default()))
                                 .clone();
 
-                            // Collect existing peers before inserting new user
                             let existing_peers: Vec<PeerInfo> = room
                                 .peers
                                 .iter()
@@ -92,12 +90,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 username, user_id, room_id, peer_count
                             );
 
-                            // 1. Send existing peer list to the joining user
                             let _ = tx.send(WsMessage::PeerList {
                                 peers: existing_peers,
                             });
 
-                            // 2. Broadcast UserJoined to existing room peers
                             let joined_msg = WsMessage::UserJoined {
                                 user_id: user_id.clone(),
                                 username: username.clone(),
@@ -154,6 +150,23 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             }
                         }
 
+                        // Realtime SpeechRecognized event broadcast (From Rust WASM STT)
+                        WsMessage::SpeechRecognized { speaker_name, content, timestamp_ms, is_final } => {
+                            if let Some(ref room_id) = current_room_id {
+                                if let Some(room) = state.rooms.get(room_id) {
+                                    let stt_evt = WsMessage::SpeechRecognized {
+                                        speaker_name,
+                                        content,
+                                        timestamp_ms,
+                                        is_final,
+                                    };
+                                    for peer_ref in room.peers.iter() {
+                                        let _ = peer_ref.value().tx.send(stt_evt.clone());
+                                    }
+                                }
+                            }
+                        }
+
                         // Realtime Chat Broadcast
                         WsMessage::ChatMessage { sender_name, content, timestamp } => {
                             if let Some(ref room_id) = current_room_id {
@@ -184,26 +197,9 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
 
             Message::Binary(audio_pcm) => {
-                // Incoming binary 16kHz PCM audio stream chunk for XWhisper processing
-                if let (Some(ref room_id), Some(ref username)) = (&current_room_id, &current_username) {
-                    if let Ok(Some(transcript_text)) = state
-                        .stt
-                        .process_audio_chunk(username, &audio_pcm)
-                        .await
-                    {
-                        let timestamp_ms = chrono::Utc::now().timestamp_millis();
-
-                        if let Some(room) = state.rooms.get(room_id) {
-                            let live_msg = WsMessage::LiveTranscript {
-                                speaker_name: username.clone(),
-                                content: transcript_text,
-                                timestamp_ms,
-                            };
-                            for peer_ref in room.peers.iter() {
-                                let _ = peer_ref.value().tx.send(live_msg.clone());
-                            }
-                        }
-                    }
+                // Store incoming 16kHz PCM audio chunk into room WAV file for post-meeting WhisperX transcription
+                if let Some(ref room_id) = current_room_id {
+                    let _ = state.recorder.append_audio_chunk(room_id, &audio_pcm).await;
                 }
             }
 
@@ -212,7 +208,6 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         }
     }
 
-    // Clean up memory state on disconnect
     if let (Some(room_id), Some(user_id), Some(username)) = (current_room_id, current_user_id, current_username) {
         if let Some(room) = state.rooms.get(&room_id) {
             room.peers.remove(&user_id);

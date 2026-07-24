@@ -63,8 +63,8 @@ pub enum WsMessage {
     ChatMessage { sender_name: String, content: String, timestamp: i64 },
     ActiveSpeaker { user_id: String, is_speaking: bool },
 
-    // Live XWhisper Transcripts
-    LiveTranscript { speaker_name: String, content: String, timestamp_ms: i64 },
+    // Realtime Rust WASM SpeechRecognized Broadcast
+    SpeechRecognized { speaker_name: String, content: String, timestamp_ms: i64, is_final: bool },
 
     // Error Notification
     Error { message: String },

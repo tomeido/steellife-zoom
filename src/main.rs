@@ -1,4 +1,5 @@
 mod ai;
+mod audio_recorder;
 mod handlers;
 mod models;
 mod state;
@@ -30,7 +31,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // 2. 100% Shared App State with XWhisper STT & AI Summarizer
+    // 2. 100% Shared App State with WASM STT & WhisperX + LLM Pipeline
     let app_state = AppState::new();
 
     // 3. Configure CORS & Explicit API Routes
@@ -42,6 +43,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/api/rooms", post(handlers::room::create_room).get(handlers::room::list_rooms))
         .route("/api/rooms/:id", get(handlers::room::get_room))
+        .route("/api/rooms/:id/end", post(handlers::minutes::end_meeting_and_generate_minutes))
         .route("/api/minutes/generate", post(handlers::minutes::generate_minutes))
         .route("/api/ws", get(handlers::ws::ws_handler))
         .nest_service("/", ServeDir::new("static"))
@@ -51,7 +53,7 @@ async fn main() -> Result<()> {
 
     // 4. Start HTTP Server (bind to 0.0.0.0 for Docker & local access)
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    info!("🚀 SLZoom Enterprise Server running on http://0.0.0.0:3000 (XWhisper Engine Active)");
+    info!("🚀 SLZoom Enterprise Server running on http://0.0.0.0:3000 (Rust WASM STT & WhisperX Engine Active)");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

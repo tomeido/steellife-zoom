@@ -1,9 +1,22 @@
+import initWasm, { RustSpeechRecognizer } from '/pkg/wasm_stt.js';
+
 document.addEventListener('DOMContentLoaded', async () => {
+  // Initialize WASM Module (Rust web-sys SpeechRecognition)
+  let isWasmLoaded = false;
+  try {
+    await initWasm();
+    isWasmLoaded = true;
+    console.log('🚀 [Rust WASM] web-sys SpeechRecognition WASM module loaded successfully');
+  } catch (err) {
+    console.warn('⚠️ [Rust WASM] Could not load WASM module directly, fallback active:', err);
+  }
+
   // DOM Elements
   const localVideo = document.getElementById('local-video');
   const videoGrid = document.getElementById('video-grid');
   const btnNewRoom = document.getElementById('btn-new-room');
   const btnJoinRoom = document.getElementById('btn-join-room');
+  const btnCopyCode = document.getElementById('btn-copy-code');
   const btnGenMinutes = document.getElementById('btn-gen-minutes');
   const roomCodeDisplay = document.getElementById('room-code-display');
 
@@ -35,17 +48,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   let currentRoomName = '화상 회의';
   let isMicOn = true;
   let isCamOn = true;
-
-  // In-memory transcript store on client
-  const transcriptsMemory = [];
   let generatedMarkdownContent = '';
 
-  // Initialize WebRTC Manager
+  let wasmRecognizer = null;
+  let audioStreamer = null;
+
+  // WebRTC Manager
   const rtcManager = new WebRTCManager(localVideo, videoGrid);
   await rtcManager.initLocalMedia();
   document.getElementById('local-user-label').innerText = `${username} (나)`;
 
-  let audioStreamer = null;
+  // Register JS bridge callback for Rust web-sys WASM SpeechRecognizer
+  window.onWasmSpeechResult = (speaker, content, timestampMs, isFinal) => {
+    if (isFinal) {
+      const timeStr = new Date(timestampMs).toLocaleTimeString();
+      addTranscriptItem(speaker, content, timeStr);
+    }
+
+    // Broadcast live transcript over WebSocket
+    if (rtcManager.ws && rtcManager.ws.readyState === WebSocket.OPEN) {
+      rtcManager.ws.send(JSON.stringify({
+        type: 'SpeechRecognized',
+        payload: {
+          speaker_name: speaker,
+          content: content,
+          timestamp_ms: timestampMs,
+          is_final: isFinal
+        }
+      }));
+    }
+  };
 
   // Sidebar Tab Switching
   tabTranscript.addEventListener('click', () => {
@@ -91,8 +123,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     joinRoomSession(code, '화상 회의실');
   });
 
-  const btnCopyCode = document.getElementById('btn-copy-code');
-
   btnCopyCode.addEventListener('click', () => {
     if (!currentRoomId) return;
     navigator.clipboard.writeText(currentRoomId).then(() => {
@@ -117,26 +147,34 @@ document.addEventListener('DOMContentLoaded', async () => {
       handleWsEvent(msg);
     });
 
-    // Start Audio Streamer for XWhisper STT
+    // Start Audio Streamer (saves PCM to server WAV for post-meeting WhisperX)
     audioStreamer = new AudioStreamer(ws);
     audioStreamer.start(rtcManager.localStream);
 
-    addTranscriptItem('시스템', `[${roomName}] 회의실에 입장했습니다. XWhisper 실시간 음성 가동 중`, new Date().toLocaleTimeString());
+    // Initialize Rust web-sys WASM SpeechRecognizer for live captions
+    if (isWasmLoaded) {
+      try {
+        wasmRecognizer = new RustSpeechRecognizer(username);
+        wasmRecognizer.start();
+        console.log('🎙️ [Rust WASM STT Engine] Live SpeechRecognition activated');
+      } catch (err) {
+        console.warn('Fallback: Web Speech API error:', err);
+      }
+    }
+
+    addTranscriptItem('시스템', `[${roomName}] 회의실 입장. (Rust web-sys WASM 실시간 자막 & 오디오 녹음 중)`, new Date().toLocaleTimeString());
   }
 
-  // Handle incoming WS events
+  // Handle incoming WebSocket messages
   function handleWsEvent(msg) {
     const { type, payload } = msg;
     if (!payload) return;
 
-    if (type === 'LiveTranscript') {
-      transcriptsMemory.push({
-        speaker_name: payload.speaker_name,
-        content: payload.content,
-        timestamp_ms: payload.timestamp_ms
-      });
-      const timeStr = new Date(payload.timestamp_ms).toLocaleTimeString();
-      addTranscriptItem(payload.speaker_name, payload.content, timeStr);
+    if (type === 'SpeechRecognized') {
+      if (payload.is_final && payload.speaker_name !== username) {
+        const timeStr = new Date(payload.timestamp_ms).toLocaleTimeString();
+        addTranscriptItem(payload.speaker_name, payload.content, timeStr);
+      }
     } else if (type === 'ChatMessage') {
       const timeStr = new Date(payload.timestamp).toLocaleTimeString();
       addChatMessage(payload.sender_name, payload.content, timeStr);
@@ -149,7 +187,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  // Add Live Transcript Item to UI
+  // Add Live Transcript Item
   function addTranscriptItem(speaker, content, time) {
     const card = document.createElement('div');
     card.className = 'transcript-card';
@@ -201,6 +239,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnToggleMic.addEventListener('click', () => {
     isMicOn = !isMicOn;
     rtcManager.toggleMic(isMicOn);
+    if (wasmRecognizer) {
+      if (isMicOn) wasmRecognizer.start();
+      else wasmRecognizer.stop();
+    }
     btnToggleMic.innerText = isMicOn ? '🎙️' : '🔇';
     btnToggleMic.style.background = isMicOn ? '' : 'var(--danger)';
   });
@@ -217,35 +259,39 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnScreenShare.style.background = isSharing ? 'var(--accent-primary)' : '';
   });
 
-  btnLeaveRoom.addEventListener('click', () => {
-    if (confirm('회의를 종료하시겠습니까?')) {
-      if (audioStreamer) audioStreamer.stop();
-      window.location.reload();
-    }
-  });
+  // 3. End Meeting & Generate WhisperX + LLM Meeting Minutes
+  async function triggerEndMeetingAndGenerateMinutes() {
+    if (!currentRoomId) return;
 
-  // 3. Generate XWhisper AI Meeting Minutes & Download .md
-  btnGenMinutes.addEventListener('click', async () => {
-    btnGenMinutes.innerText = '⏳ XWhisper 요약 생성 중...';
+    btnGenMinutes.innerText = '⏳ WhisperX 전사 & LLM 회의록 작성 중...';
     btnGenMinutes.disabled = true;
 
     try {
-      const res = await fetch('/api/minutes/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          room_name: currentRoomName,
-          transcripts: transcriptsMemory
-        })
+      // Stop local audio streaming and WASM STT
+      if (wasmRecognizer) wasmRecognizer.stop();
+      if (audioStreamer) audioStreamer.stop();
+
+      const res = await fetch(`/api/rooms/${currentRoomId}/end`, {
+        method: 'POST'
       });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: Failed to generate WhisperX minutes`);
+      }
       const minutes = await res.json();
       generatedMarkdownContent = minutes.markdown_content;
       displayMinutes(minutes);
     } catch (err) {
-      alert('회의록 생성 에러: ' + err.message);
+      alert('WhisperX 회의록 생성 에러: ' + err.message);
     } finally {
-      btnGenMinutes.innerText = '✨ XWhisper 회의록 생성 & .md 다운로드';
+      btnGenMinutes.innerText = '✨ 회의 종료 & WhisperX 회의록 생성';
       btnGenMinutes.disabled = false;
+    }
+  }
+
+  btnGenMinutes.addEventListener('click', triggerEndMeetingAndGenerateMinutes);
+  btnLeaveRoom.addEventListener('click', async () => {
+    if (confirm('회의를 종료하고 WhisperX 회의록을 생성하시겠습니까?')) {
+      await triggerEndMeetingAndGenerateMinutes();
     }
   });
 
@@ -267,7 +313,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnCloseModal.addEventListener('click', () => minutesModal.classList.add('hidden'));
   btnCloseModalFooter.addEventListener('click', () => minutesModal.classList.add('hidden'));
 
-  // Direct Client-Side .md File Download (Blob)
+  // Client Download .md File
   btnDownloadMd.addEventListener('click', () => {
     if (!generatedMarkdownContent) return;
 
@@ -275,7 +321,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `xwhisper_minutes_${currentRoomId || 'session'}.md`);
+    link.setAttribute('download', `whisperx_minutes_${currentRoomId || 'session'}.md`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

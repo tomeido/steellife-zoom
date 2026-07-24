@@ -1,25 +1,27 @@
-# Stage 1: Build stage using latest Rust image (Edition 2024 support)
+# Stage 1: Build Rust backend & WASM module
 FROM rust:latest AS builder
 
 WORKDIR /usr/src/slzoom
 
-# Copy manifest and source files
+# Copy Cargo configs and sources
 COPY Cargo.toml Cargo.lock ./
+COPY wasm_stt ./wasm_stt
 COPY src ./src
+COPY static ./static
 
-# Build release binary
+# Build release backend binary
 RUN cargo build --release
 
 # Stage 2: Runtime stage
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates ffmpeg python3 python3-pip && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy release binary and static assets
+# Copy release binary and static assets (including static/pkg)
 COPY --from=builder /usr/src/slzoom/target/release/slzoom /app/slzoom
-COPY static /app/static
+COPY --from=builder /usr/src/slzoom/static /app/static
 
 EXPOSE 3000
 ENV RUST_LOG=info

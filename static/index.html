@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SLZoom - Rust 화상회의 & XWhisper AI 회의록</title>
+  <title>SLZoom - Rust web-sys WASM & WhisperX AI 회의록</title>
   <link rel="stylesheet" href="/css/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,14 +18,14 @@
         <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
       </svg>
       SLZoom
-      <span class="badge-live">XWhisper STT Engine Active</span>
+      <span class="badge-live">Rust web-sys WASM & WhisperX Active</span>
     </div>
     <div class="nav-actions">
       <span id="room-code-display" style="font-weight:600; color:var(--text-secondary);">회의실: 미입장</span>
       <button id="btn-copy-code" class="btn" style="display:none;">📋 ID 복사</button>
       <button id="btn-new-room" class="btn btn-primary">➕ 새 회의 만들기</button>
       <button id="btn-join-room" class="btn">🔑 입장하기</button>
-      <button id="btn-gen-minutes" class="btn btn-primary" style="display:none;">✨ XWhisper 회의록 생성 & .md 다운로드</button>
+      <button id="btn-gen-minutes" class="btn btn-primary" style="display:none;">✨ 회의 종료 & WhisperX 회의록 생성</button>
     </div>
   </header>
 
@@ -49,14 +49,14 @@
         <button id="btn-toggle-cam" class="btn btn-icon" title="카메라 On/Off">📷</button>
         <button id="btn-screen-share" class="btn btn-icon" title="화면 공유">🖥️</button>
         <button id="btn-toggle-chat" class="btn btn-icon" title="자막/채팅 패널">💬</button>
-        <button id="btn-leave-room" class="btn btn-danger" title="나가기">🛑 종료</button>
+        <button id="btn-leave-room" class="btn btn-danger" title="회의 종료 & WhisperX 회의록">🛑 회의 종료</button>
       </div>
     </div>
 
-    <!-- Sidebar: XWhisper Live Transcript & Chat -->
+    <!-- Sidebar: Rust WASM Live STT Captions & Chat -->
     <div id="sidebar" class="sidebar">
       <div class="sidebar-tabs">
-        <button id="tab-transcript" class="tab-btn active">🎙️ XWhisper 실시간 자막</button>
+        <button id="tab-transcript" class="tab-btn active">🎙️ Rust WASM 실시간 자막</button>
         <button id="tab-chat" class="tab-btn">💬 채팅</button>
       </div>
 
@@ -67,7 +67,7 @@
             <span>방금 전</span>
           </div>
           <div class="transcript-body">
-            XWhisper 실시간 음성 인식 엔진이 연결되었습니다. 마이크 발언 시 16kHz PCM 스트림으로 실시간 자막이 생성됩니다.
+            Rust web-sys WASM 음성 자막 엔진이 연결되었습니다. 마이크 발언 시 WASM을 통해 실시간 자막이 표시되며, 회의 종료 시 WhisperX 화자 분리 및 LLM 회의록이 생성됩니다.
           </div>
         </div>
       </div>
@@ -86,13 +86,13 @@
   <div id="minutes-modal" class="modal-overlay hidden">
     <div class="modal-content">
       <div class="modal-header">
-        <h3 id="minutes-modal-title">✨ XWhisper 회의록 생성 완료</h3>
+        <h3 id="minutes-modal-title">✨ WhisperX AI 회의록 생성 완료</h3>
         <button id="btn-close-modal" class="btn" style="padding:4px 10px;">✕</button>
       </div>
       <div class="modal-body" id="minutes-modal-body">
         <div class="minutes-section">
-          <h4>📝 회의 요약</h4>
-          <p id="minutes-summary">생성 중...</p>
+          <h4>📝 회의 요약 (Executive Summary)</h4>
+          <p id="minutes-summary">WhisperX 전사 데이터 분석 중...</p>
         </div>
         <div class="minutes-section">
           <h4>📌 주요 논의 사항</h4>
@@ -104,7 +104,7 @@
         </div>
       </div>
       <div class="modal-footer">
-        <button id="btn-download-md" class="btn btn-primary">📥 .md 파일 다운로드</button>
+        <button id="btn-download-md" class="btn btn-primary">📥 .md 회의록 파일 다운로드</button>
         <button id="btn-close-modal-footer" class="btn">닫기</button>
       </div>
     </div>
@@ -112,6 +112,6 @@
 
   <script src="/js/audio_streamer.js"></script>
   <script src="/js/webrtc.js"></script>
-  <script src="/js/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>
