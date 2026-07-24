@@ -10,7 +10,7 @@ class WebRTCManager {
     this.currentUserId = null;
     this.currentRoomId = null;
 
-    // Multi STUN Configuration for Cross-Network (Mobile <-> PC NAT Traversal)
+    // Multi STUN Configuration
     this.iceServers = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -37,7 +37,7 @@ class WebRTCManager {
       return this.localStream;
     } catch (err) {
       console.warn('Camera/Mic permission denied or not available:', err);
-      // Fallback: Canvas stream for devices without camera access
+      // Canvas fallback for environments without camera
       const canvas = document.createElement('canvas');
       canvas.width = 640; canvas.height = 480;
       const ctx = canvas.getContext('2d');
@@ -82,25 +82,25 @@ class WebRTCManager {
 
     switch (type) {
       case 'PeerList':
-        // Joining user receives list of existing peers. Create video tiles and wait for their Offers.
+        // Newly joined user (B) receives existing peers (A). Create tile and send Offer to A!
         if (payload.peers && Array.isArray(payload.peers)) {
           for (const peer of payload.peers) {
-            console.log(`[PeerList] Existing peer found: ${peer.username} (${peer.user_id})`);
+            console.log(`[PeerList] Found existing peer ${peer.username} (${peer.user_id}). Initiating Offer.`);
             this.ensurePeerTile(peer.user_id, peer.username);
+            await this.createOffer(peer.user_id);
           }
         }
         break;
 
       case 'UserJoined':
-        // Existing user receives notification of new peer. Initiate Offer!
-        console.log(`[UserJoined] ${payload.username} (${payload.user_id}) joined room. Sending WebRTC Offer.`);
+        // Existing user (A) receives new user (B) notification. Create tile and wait for B's Offer.
+        console.log(`[UserJoined] ${payload.username} (${payload.user_id}) joined. Creating tile & awaiting Offer.`);
         this.ensurePeerTile(payload.user_id, payload.username);
-        await this.createOffer(payload.user_id);
         break;
 
       case 'Offer':
         if (payload.target_user_id === this.currentUserId) {
-          console.log(`[Offer Received] From ${payload.sender_user_id}. Responding with Answer.`);
+          console.log(`[Offer Received] From ${payload.sender_user_id}. Creating Answer.`);
           this.ensurePeerTile(payload.sender_user_id, '참여자');
           await this.handleOffer(payload.sender_user_id, payload.sdp);
         }
@@ -108,7 +108,7 @@ class WebRTCManager {
 
       case 'Answer':
         if (payload.target_user_id === this.currentUserId) {
-          console.log(`[Answer Received] From ${payload.sender_user_id}. Finalizing connection.`);
+          console.log(`[Answer Received] From ${payload.sender_user_id}. Set remote description.`);
           await this.handleAnswer(payload.sender_user_id, payload.sdp);
         }
         break;
@@ -181,17 +181,13 @@ class WebRTCManager {
 
     // Remote Stream Handler
     pc.ontrack = (event) => {
-      console.log(`🎥 Remote track received from ${peerUserId}`, event.streams);
+      console.log(`🎥 Remote video track received from ${peerUserId}`, event.streams);
       const peerTile = this.ensurePeerTile(peerUserId, '참여자');
       const remoteVideo = peerTile.querySelector('video');
       if (remoteVideo) {
         remoteVideo.srcObject = event.streams[0];
-        remoteVideo.play().catch(e => console.warn('Autoplay prevented:', e));
+        remoteVideo.play().catch(e => console.warn('Autoplay prevented, retrying:', e));
       }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      console.log(`ICE Connection State [${peerUserId}]:`, pc.iceConnectionState);
     };
 
     return pc;
