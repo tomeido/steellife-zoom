@@ -83,7 +83,7 @@ impl AiSummarizer {
         // 1. Call Google AI Studio Gemini API if key is available
         if let Some(ref api_key) = self.gemini_api_key {
             let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={}",
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={}",
                 api_key
             );
 
