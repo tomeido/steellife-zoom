@@ -272,11 +272,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // 3. End Meeting & Generate WhisperX + LLM Meeting Minutes
+  let isGeneratingMinutes = false;
   async function triggerEndMeetingAndGenerateMinutes() {
-    if (!currentRoomId) return;
+    if (!currentRoomId || isGeneratingMinutes) return;
 
+    isGeneratingMinutes = true;
     btnGenMinutes.innerText = '⏳ WhisperX 전사 & LLM 회의록 작성 중...';
     btnGenMinutes.disabled = true;
+    btnLeaveRoom.disabled = true;
 
     try {
       // Stop local audio streaming and WASM STT
@@ -295,8 +298,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (err) {
       alert('WhisperX 회의록 생성 에러: ' + err.message);
     } finally {
-      btnGenMinutes.innerText = '✨ 회의 종료 & WhisperX 회의록 생성';
+      isGeneratingMinutes = false;
+      btnGenMinutes.innerText = '✨ 회의 종료 & 회의록';
       btnGenMinutes.disabled = false;
+      btnLeaveRoom.disabled = false;
     }
   }
 

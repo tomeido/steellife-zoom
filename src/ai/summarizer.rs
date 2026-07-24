@@ -82,86 +82,98 @@ impl AiSummarizer {
 
         // 1. Call Google AI Studio Gemini API if key is available
         if let Some(ref api_key) = self.gemini_api_key {
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={}",
-                api_key
-            );
-
-            let prompt = format!(
-                "당신은 기업용 회의록 작성 AI 전문가입니다. 다음은 WhisperX로 화자 분리 및 타임스탬프가 적용된 회의 녹취록입니다.\n\n\
-                [회의 정보]\n\
-                - 회의명: {}\n\
-                - 참석자: {}\n\n\
-                [화자 전사 녹취록]\n\
-                {}\n\n\
-                위 녹취록을 바탕으로 전문적인 회의록 마크다운 보고서를 작성해 주세요.\n\
-                반드시 아래 구조로 명확히 한국어로 작성해 주세요:\n\
-                ## 💡 Executive Summary\n\
-                (핵심 회의 내용 요약 3~4문장)\n\n\
-                ## 📌 주요 논의 사항 (Key Discussions)\n\
-                (화자별 발언 및 주요 안건 불렛포인트 정리)\n\n\
-                ## 🎯 액션 아이템 (Action Items)\n\
-                (담당자 지정 및 향후 실행 과제)",
-                room_name,
-                attendees.join(", "),
-                if diarized_transcript_md.is_empty() {
-                    "녹취록이 비어있습니다. 표준 안건에 대해 회의록을 구성해 주세요."
-                } else {
-                    &diarized_transcript_md
-                }
-            );
-
-            let payload = GeminiRequest {
-                contents: vec![GeminiContent {
-                    parts: vec![GeminiPart { text: prompt }],
-                }],
-            };
+            let candidate_models = [
+                "gemini-2.5-flash",
+                "gemini-2.0-flash",
+                "gemini-1.5-flash-latest",
+                "gemini-1.5-pro",
+            ];
 
             let client = reqwest::Client::new();
-            info!("🤖 Requesting AI Meeting Minutes from Google AI Studio (Gemini API)...");
 
-            let resp_res = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await;
+            for model in candidate_models {
+                let url = format!(
+                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                    model, api_key
+                );
 
-            match resp_res {
-                Ok(resp) if resp.status().is_success() => {
-                    if let Ok(gemini_resp) = resp.json::<GeminiResponse>().await {
-                        if let Some(candidates) = gemini_resp.candidates {
-                            if let Some(first_cand) = candidates.first() {
-                                if let Some(ref content) = first_cand.content {
-                                    if let Some(ref parts) = content.parts {
-                                        if let Some(first_part) = parts.first() {
-                                            if let Some(ref generated_text) = first_part.text {
-                                                info!("✅ Successfully generated AI meeting minutes via Google Gemini API!");
+                let prompt = format!(
+                    "당신은 기업용 회의록 작성 AI 전문가입니다. 다음은 WhisperX로 화자 분리 및 타임스탬프가 적용된 회의 녹취록입니다.\n\n\
+                    [회의 정보]\n\
+                    - 회의명: {}\n\
+                    - 참석자: {}\n\n\
+                    [화자 전사 녹취록]\n\
+                    {}\n\n\
+                    위 녹취록을 바탕으로 전문적인 회의록 마크다운 보고서를 작성해 주세요.\n\
+                    반드시 아래 구조로 명확히 한국어로 작성해 주세요:\n\
+                    ## 💡 Executive Summary\n\
+                    (핵심 회의 내용 요약 3~4문장)\n\n\
+                    ## 📌 주요 논의 사항 (Key Discussions)\n\
+                    (화자별 발언 및 주요 안건 불렛포인트 정리)\n\n\
+                    ## 🎯 액션 아이템 (Action Items)\n\
+                    (담당자 지정 및 향후 실행 과제)",
+                    room_name,
+                    attendees.join(", "),
+                    if diarized_transcript_md.is_empty() {
+                        "녹취록이 비어있습니다. 표준 안건에 대해 회의록을 구성해 주세요."
+                    } else {
+                        &diarized_transcript_md
+                    }
+                );
 
-                                                let full_markdown = format!(
-                                                    "# 📝 WhisperX & Google Gemini AI 회의록: {}\n\n\
-                                                    - **작성 일시**: {}\n\
-                                                    - **참석자**: {}\n\n\
-                                                    ---\n\n\
-                                                    {}\n\n\
-                                                    ---\n\n\
-                                                    ## 🎙️ WhisperX 화자 분리 녹취록 (Diarized Transcripts Log)\n\n\
-                                                    {}",
-                                                    room_name,
-                                                    now_str,
-                                                    attendees.join(", "),
-                                                    generated_text,
-                                                    diarized_transcript_md
-                                                );
+                let payload = GeminiRequest {
+                    contents: vec![GeminiContent {
+                        parts: vec![GeminiPart { text: prompt }],
+                    }],
+                };
 
-                                                return Ok(MeetingMinutesResp {
-                                                    title: format!("{} - Google Gemini AI 회의록", room_name),
-                                                    summary: "Google AI Studio (Gemini API) 기반 고품질 자동 회의록이 생성되었습니다.".to_string(),
-                                                    key_discussions: vec!["Google Gemini AI 모델 기반 주요 안건 자동 분석 완료".to_string()],
-                                                    action_items: vec!["생성된 AI 회의록 기반 세부 실행 과제 이행".to_string()],
-                                                    attendees,
-                                                    markdown_content: full_markdown,
-                                                    created_at: now_str,
-                                                });
+                info!("🤖 Requesting AI Meeting Minutes from Google AI Studio (Model: {})...", model);
+
+                let resp_res = client
+                    .post(&url)
+                    .json(&payload)
+                    .send()
+                    .await;
+
+                match resp_res {
+                    Ok(resp) if resp.status().is_success() => {
+                        if let Ok(gemini_resp) = resp.json::<GeminiResponse>().await {
+                            if let Some(candidates) = gemini_resp.candidates {
+                                if let Some(first_cand) = candidates.first() {
+                                    if let Some(ref content) = first_cand.content {
+                                        if let Some(ref parts) = content.parts {
+                                            if let Some(first_part) = parts.first() {
+                                                if let Some(ref generated_text) = first_part.text {
+                                                    info!("✅ Successfully generated AI meeting minutes via Google Gemini API ({})!", model);
+
+                                                    let full_markdown = format!(
+                                                        "# 📝 WhisperX & Google Gemini AI 회의록: {}\n\n\
+                                                        - **작성 일시**: {}\n\
+                                                        - **참석자**: {}\n\
+                                                        - **AI Engine**: Google Gemini API ({})\n\n\
+                                                        ---\n\n\
+                                                        {}\n\n\
+                                                        ---\n\n\
+                                                        ## 🎙️ WhisperX 화자 분리 녹취록 (Diarized Transcripts Log)\n\n\
+                                                        {}",
+                                                        room_name,
+                                                        now_str,
+                                                        attendees.join(", "),
+                                                        model,
+                                                        generated_text,
+                                                        diarized_transcript_md
+                                                    );
+
+                                                    return Ok(MeetingMinutesResp {
+                                                        title: format!("{} - Google Gemini AI 회의록", room_name),
+                                                        summary: format!("Google AI Studio (Gemini API: {}) 기반 고품질 자동 회의록이 생성되었습니다.", model),
+                                                        key_discussions: vec!["Google Gemini AI 모델 기반 주요 안건 자동 분석 완료".to_string()],
+                                                        action_items: vec!["생성된 AI 회의록 기반 세부 실행 과제 이행".to_string()],
+                                                        attendees,
+                                                        markdown_content: full_markdown,
+                                                        created_at: now_str,
+                                                    });
+                                                }
                                             }
                                         }
                                     }
@@ -169,13 +181,13 @@ impl AiSummarizer {
                             }
                         }
                     }
-                }
-                Ok(resp) => {
-                    let err_text = resp.text().await.unwrap_or_default();
-                    warn!("⚠️ Google Gemini API returned HTTP error: {}", err_text);
-                }
-                Err(e) => {
-                    warn!("⚠️ Failed to connect to Google Gemini API: {}", e);
+                    Ok(resp) => {
+                        let err_text = resp.text().await.unwrap_or_default();
+                        warn!("⚠️ Google Gemini API ({}) returned HTTP error: {}", model, err_text);
+                    }
+                    Err(e) => {
+                        warn!("⚠️ Failed to connect to Google Gemini API ({}): {}", model, e);
+                    }
                 }
             }
         }

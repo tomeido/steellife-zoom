@@ -100,25 +100,82 @@ class WebRTCManager {
     return canvas.captureStream(30);
   }
 
+  showInsecureContextWarning() {
+    let warningBanner = document.getElementById('insecure-context-banner');
+    if (!warningBanner) {
+      warningBanner = document.createElement('div');
+      warningBanner.id = 'insecure-context-banner';
+      warningBanner.style.cssText = 'position:fixed; top:12px; left:50%; transform:translateX(-50%); background:#ef4444; color:#fff; padding:10px 20px; border-radius:8px; z-index:9999; font-weight:600; font-size:0.88rem; box-shadow:0 4px 20px rgba(0,0,0,0.5); text-align:center; max-width:90%;';
+      warningBanner.innerHTML = '⚠️ 보안 연결(HTTPS 또는 http://localhost)이 아닌 환경에서는 브라우저가 카메라/마이크 권한을 차단합니다. <strong>http://localhost:3000</strong> 으로 접속해 주세요.';
+      document.body.appendChild(warningBanner);
+    }
+  }
+
   async initLocalMedia() {
-    try {
-      // First try with resolution preference
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: true
-      });
-    } catch (e1) {
-      console.warn('[WebRTC] Constrained getUserMedia failed, retrying simple getUserMedia...', e1);
+    // Check for Secure Context (HTTPS or localhost)
+    if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      console.warn('[WebRTC] Secure Context (HTTPS or localhost) is required for Camera/Mic access.');
+      this.showInsecureContextWarning();
+    }
+
+    let audioTrack = null;
+    let videoTrack = null;
+
+    // 1. Try fetching both audio and video together
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       try {
-        this.localStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
           audio: true
         });
-      } catch (err) {
-        console.warn('[WebRTC] Camera/Mic access denied or unavailable. Activating canvas fallback stream:', err);
-        this.localStream = this.createCanvasFallbackStream();
+        audioTrack = stream.getAudioTracks()[0] || null;
+        videoTrack = stream.getVideoTracks()[0] || null;
+      } catch (err1) {
+        console.warn('[WebRTC] Full getUserMedia failed, trying individual audio/video requests...', err1);
+        
+        // 1a. Try simple video + audio request without constraints
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+          audioTrack = stream.getAudioTracks()[0] || null;
+          videoTrack = stream.getVideoTracks()[0] || null;
+        } catch (err2) {
+          // 1b. Try audio alone
+          try {
+            const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioTrack = audioStream.getAudioTracks()[0] || null;
+            console.log('[WebRTC] Successfully acquired audio track.');
+          } catch (errAudio) {
+            console.warn('[WebRTC] Could not get audio track:', errAudio);
+          }
+
+          // 1c. Try video alone
+          try {
+            const videoStream = await navigator.mediaDevices.getUserMedia({ video: true });
+            videoTrack = videoStream.getVideoTracks()[0] || null;
+            console.log('[WebRTC] Successfully acquired video track.');
+          } catch (errVideo) {
+            console.warn('[WebRTC] Could not get video track:', errVideo);
+          }
+        }
       }
+    } else {
+      console.warn('[WebRTC] navigator.mediaDevices.getUserMedia is not supported or blocked by HTTP context.');
+      this.showInsecureContextWarning();
     }
+
+    // 2. If video track is missing, create dynamic canvas fallback video track
+    if (!videoTrack) {
+      console.warn('[WebRTC] Using canvas video stream fallback');
+      const canvasStream = this.createCanvasFallbackStream();
+      videoTrack = canvasStream.getVideoTracks()[0];
+    }
+
+    // 3. Assemble combined MediaStream
+    const combinedTracks = [];
+    if (audioTrack) combinedTracks.push(audioTrack);
+    if (videoTrack) combinedTracks.push(videoTrack);
+
+    this.localStream = new MediaStream(combinedTracks);
 
     if (this.localVideo && this.localStream) {
       this.localVideo.setAttribute('playsinline', 'true');

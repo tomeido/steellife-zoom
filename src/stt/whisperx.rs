@@ -55,8 +55,8 @@ impl WhisperXEngine {
             audio_file_path, self.model_name
         );
 
-        // Run whisperx CLI command
-        let status_res = Command::new(&self.whisperx_bin)
+        // Run whisperx CLI command with 10s timeout
+        let cmd_fut = Command::new(&self.whisperx_bin)
             .arg(audio_file_path.to_str().unwrap_or_default())
             .arg("--model")
             .arg(&self.model_name)
@@ -66,11 +66,12 @@ impl WhisperXEngine {
             .arg(output_dir.to_str().unwrap_or_default())
             .arg("--output_format")
             .arg("json")
-            .status()
-            .await;
+            .status();
+
+        let status_res = tokio::time::timeout(std::time::Duration::from_secs(10), cmd_fut).await;
 
         match status_res {
-            Ok(status) if status.success() => {
+            Ok(Ok(status)) if status.success() => {
                 info!("✅ WhisperX execution completed successfully!");
                 let json_file = output_dir.join(format!("{}.json", room_id));
                 if json_file.exists() {
@@ -81,16 +82,21 @@ impl WhisperXEngine {
                     }
                 }
             }
-            Ok(status) => {
+            Ok(Ok(status)) => {
                 warn!(
                     "⚠️ WhisperX exited with status code: {}. (참고: FFmpeg 미설치 시 'winget install ffmpeg'로 설치 필요)",
                     status
                 );
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 warn!(
                     "⚠️ WhisperX executable check failed ({}). Fallback transcript engine active.",
                     e
+                );
+            }
+            Err(_) => {
+                warn!(
+                    "⚠️ WhisperX process timed out (10s limit exceeded). Fallback transcript engine active."
                 );
             }
         }
