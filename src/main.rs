@@ -22,6 +22,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // 0. Load .env file automatically
+    dotenvy::dotenv().ok();
+
     // 1. Initialize logging
     tracing_subscriber::registry()
         .with(
@@ -31,7 +34,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    // 2. 100% Shared App State with WASM STT & WhisperX + LLM Pipeline
+    // 2. 100% Shared App State with WASM STT & WhisperX + Google Gemini API Pipeline
     let app_state = AppState::new();
 
     // 3. Configure CORS & Explicit API Routes
@@ -53,7 +56,7 @@ async fn main() -> Result<()> {
 
     // 4. Start HTTP Server (bind to 0.0.0.0 for Docker & local access)
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
-    info!("🚀 SLZoom Enterprise Server running on http://0.0.0.0:3000 (Rust WASM STT & WhisperX Engine Active)");
+    info!("🚀 SLZoom Enterprise Server running on http://0.0.0.0:3000 (Rust WASM STT & WhisperX + Google Gemini API Active)");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
