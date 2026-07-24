@@ -10,8 +10,10 @@ class WebRTCManager {
     this.ws = null;
     this.currentUserId = null;
     this.currentRoomId = null;
+    this.screenShareStateHandler = null;
 
-    // Multi STUN & Public Relay ICE Servers
+    // STUN is enough for local testing. Production deployments can add TURN
+    // credentials through /api/config/webrtc for networks with restrictive NATs.
     this.iceServers = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -22,6 +24,37 @@ class WebRTCManager {
         { urls: 'stun:stun.services.mozilla.com' }
       ]
     };
+  }
+
+  async loadIceServers() {
+    try {
+      const response = await fetch('/api/config/webrtc');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const config = await response.json();
+      if (!Array.isArray(config.ice_servers) || config.ice_servers.length === 0) {
+        throw new Error('The server returned no ICE servers');
+      }
+
+      this.iceServers = { iceServers: config.ice_servers };
+      console.info(`[WebRTC] Loaded ${config.ice_servers.length} ICE server configuration(s).`);
+    } catch (error) {
+      // Keep the bundled STUN entries so a temporary config endpoint issue does
+      // not prevent same-network calls from starting.
+      console.warn('[WebRTC] Could not load server ICE configuration; using STUN fallback.', error);
+    }
+  }
+
+  onScreenShareStateChange(handler) {
+    this.screenShareStateHandler = handler;
+  }
+
+  notifyScreenShareState(isSharing) {
+    if (this.screenShareStateHandler) {
+      this.screenShareStateHandler(isSharing);
+    }
   }
 
   async initLocalMedia() {
@@ -184,10 +217,16 @@ class WebRTCManager {
   ensureLocalTracks(pc) {
     if (!this.localStream) return;
     const senders = pc.getSenders();
-    this.localStream.getTracks().forEach(track => {
+    const videoStream = this.screenStream || this.localStream;
+    const tracks = [
+      ...this.localStream.getAudioTracks().map(track => ({ track, stream: this.localStream })),
+      ...videoStream.getVideoTracks().map(track => ({ track, stream: videoStream }))
+    ];
+
+    tracks.forEach(({ track, stream }) => {
       const exists = senders.some(s => s.track && s.track.kind === track.kind);
       if (!exists) {
-        pc.addTrack(track, this.localStream);
+        pc.addTrack(track, stream);
       }
     });
   }
@@ -399,21 +438,93 @@ class WebRTCManager {
     }
   }
 
+  async replaceOutgoingVideoTrack(stream) {
+    const videoTrack = stream?.getVideoTracks()[0] || null;
+    if (!videoTrack) {
+      throw new Error('No video track is available to send');
+    }
+
+    const peers = Object.entries(this.peerConnections);
+    const replacements = peers.map(async ([peerUserId, pc]) => {
+      if (pc.connectionState === 'closed') return;
+
+      const sender = pc.getSenders().find(candidate => candidate.track?.kind === 'video');
+      if (!sender) {
+        // Every normal connection has a camera sender. This fallback handles a
+        // peer created while media was still initializing.
+        pc.addTrack(videoTrack, stream);
+        await this.createOffer(peerUserId);
+        return;
+      }
+
+      await sender.replaceTrack(videoTrack);
+    });
+
+    const results = await Promise.allSettled(replacements);
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.warn(`[WebRTC] Failed to switch the video track for ${peers[index][0]}.`, result.reason);
+      }
+    });
+  }
+
+  async stopScreenShare() {
+    const stream = this.screenStream;
+    if (!stream) return false;
+
+    // Clear first because stopping display tracks emits an "ended" event.
+    this.screenStream = null;
+    stream.getTracks().forEach(track => track.stop());
+
+    try {
+      await this.replaceOutgoingVideoTrack(this.localStream);
+    } catch (error) {
+      console.error('[WebRTC] Failed to restore the camera after screen sharing.', error);
+    }
+
+    this.localVideo.srcObject = this.localStream;
+    this.notifyScreenShareState(false);
+    return false;
+  }
+
   async toggleScreenShare() {
     if (this.screenStream) {
-      this.screenStream.getTracks().forEach(t => t.stop());
-      this.screenStream = null;
-      this.localVideo.srcObject = this.localStream;
+      return this.stopScreenShare();
+    }
+
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      console.warn('Screen sharing requires a secure (HTTPS) browser context.');
       return false;
-    } else {
-      try {
-        this.screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        this.localVideo.srcObject = this.screenStream;
-        return true;
-      } catch (e) {
-        console.warn('Screen share cancelled', e);
-        return false;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30, max: 30 } },
+        audio: false
+      });
+      const videoTrack = stream.getVideoTracks()[0];
+      if (!videoTrack) {
+        stream.getTracks().forEach(track => track.stop());
+        throw new Error('No display video track was selected');
       }
+
+      this.screenStream = stream;
+      videoTrack.addEventListener('ended', () => {
+        if (this.screenStream === stream) {
+          this.stopScreenShare();
+        }
+      }, { once: true });
+
+      await this.replaceOutgoingVideoTrack(stream);
+      this.localVideo.srcObject = stream;
+      this.notifyScreenShareState(true);
+      return true;
+    } catch (error) {
+      console.warn('Screen share cancelled or could not start.', error);
+      if (this.screenStream) {
+        await this.stopScreenShare();
+      }
+      return false;
     }
   }
 }

@@ -46,6 +46,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/api/rooms", post(handlers::room::create_room).get(handlers::room::list_rooms))
         .route("/api/rooms/:id", get(handlers::room::get_room))
+        .route("/api/config/webrtc", get(handlers::room::get_webrtc_config))
         .route("/api/rooms/:id/end", post(handlers::minutes::end_meeting_and_generate_minutes))
         .route("/api/minutes/generate", post(handlers::minutes::generate_minutes))
         .route("/api/ws", get(handlers::ws::ws_handler))

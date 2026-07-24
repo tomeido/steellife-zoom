@@ -14,6 +14,20 @@ pub struct CreateRoomReq {
     pub host_id: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct WebRtcIceServer {
+    pub urls: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WebRtcConfig {
+    pub ice_servers: Vec<WebRtcIceServer>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PeerInfo {
     pub user_id: String,

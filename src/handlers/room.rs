@@ -1,5 +1,5 @@
 use crate::{
-    models::{CreateRoomReq, RoomInfo},
+    models::{CreateRoomReq, RoomInfo, WebRtcConfig, WebRtcIceServer},
     state::{AppState, RoomSession},
 };
 use axum::{
@@ -9,6 +9,40 @@ use axum::{
 };
 use std::sync::Arc;
 use uuid::Uuid;
+
+pub async fn get_webrtc_config() -> Json<WebRtcConfig> {
+    let mut ice_servers = vec![WebRtcIceServer {
+        urls: vec![
+            "stun:stun.l.google.com:19302".to_string(),
+            "stun:stun1.l.google.com:19302".to_string(),
+            "stun:stun.services.mozilla.com".to_string(),
+        ],
+        username: None,
+        credential: None,
+    }];
+
+    let urls: Vec<String> = std::env::var("TURN_URLS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    if !urls.is_empty() {
+        ice_servers.push(WebRtcIceServer {
+            urls,
+            username: std::env::var("TURN_USERNAME")
+                .ok()
+                .filter(|value| !value.is_empty()),
+            credential: std::env::var("TURN_CREDENTIAL")
+                .ok()
+                .filter(|value| !value.is_empty()),
+        });
+    }
+
+    Json(WebRtcConfig { ice_servers })
+}
 
 pub async fn create_room(
     State(state): State<AppState>,

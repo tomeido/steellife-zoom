@@ -64,7 +64,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // WebRTC Manager
   const rtcManager = new WebRTCManager(localVideo, videoGrid);
+  await rtcManager.loadIceServers();
   await rtcManager.initLocalMedia();
+  rtcManager.onScreenShareStateChange((isSharing) => {
+    btnScreenShare.style.background = isSharing ? 'var(--accent-primary)' : '';
+  });
   document.getElementById('local-user-label').innerText = `${username} (나)`;
 
   // Register JS bridge callback for Rust web-sys WASM SpeechRecognizer
@@ -264,8 +268,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   btnScreenShare.addEventListener('click', async () => {
-    const isSharing = await rtcManager.toggleScreenShare();
-    btnScreenShare.style.background = isSharing ? 'var(--accent-primary)' : '';
+    await rtcManager.toggleScreenShare();
   });
 
   // 3. End Meeting & Generate WhisperX + LLM Meeting Minutes
