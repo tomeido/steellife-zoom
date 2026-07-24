@@ -89,7 +89,17 @@ class LiveKitManager {
     }
 
     const { server_url, token } = await tokenRes.json();
-    console.log(`🔌 Connecting to LiveKit Self-Hosted Server: ${server_url} (Room: ${roomId})`);
+    
+    let liveKitUrl = server_url;
+    // Smart URL Resolution for remote IP / mobile / Cloudflare domain access
+    if ((liveKitUrl.includes('localhost') || liveKitUrl.includes('127.0.0.1')) && 
+        location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      liveKitUrl = `${wsProtocol}//${location.hostname}:7880`;
+      console.info(`🔄 [LiveKit] Transformed server URL for remote client access: ${liveKitUrl}`);
+    }
+
+    console.log(`🔌 Connecting to LiveKit Self-Hosted Server: ${liveKitUrl} (Room: ${roomId})`);
 
     // 2. Instantiate LiveKit Room
     const LiveKitClient = window.LivekitClient || window.LiveKit;
@@ -109,7 +119,7 @@ class LiveKitManager {
     this.setupRoomEvents(LiveKitClient);
 
     // 4. Connect to LiveKit SFU Server
-    await this.room.connect(server_url, token);
+    await this.room.connect(liveKitUrl, token);
     console.log('✅ [LiveKit] Successfully connected to LiveKit SFU Server room:', this.room.name);
 
     // 5. Publish Local Audio & Video Tracks

@@ -1,5 +1,5 @@
 # Stage 1: Build Rust backend & WASM module
-FROM rust:latest AS builder
+FROM rust:bookworm AS builder
 
 WORKDIR /usr/src/slzoom
 
