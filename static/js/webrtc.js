@@ -6,11 +6,12 @@ class WebRTCManager {
     this.screenStream = null;
     this.peerConnections = {}; // peerUserId -> RTCPeerConnection
     this.iceCandidateQueues = {}; // peerUserId -> Array of candidate
+    this.iceRestartTimers = {}; // peerUserId -> timer
     this.ws = null;
     this.currentUserId = null;
     this.currentRoomId = null;
 
-    // Multi STUN Configuration
+    // Multi STUN & Public Relay ICE Servers
     this.iceServers = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -33,11 +34,13 @@ class WebRTCManager {
         },
         audio: true
       });
+      this.localVideo.setAttribute('playsinline', 'true');
+      this.localVideo.setAttribute('webkit-playsinline', 'true');
       this.localVideo.srcObject = this.localStream;
       return this.localStream;
     } catch (err) {
       console.warn('Camera/Mic permission denied or not available:', err);
-      // Canvas fallback for environments without camera
+      // Canvas fallback for environments without camera access
       const canvas = document.createElement('canvas');
       canvas.width = 640; canvas.height = 480;
       const ctx = canvas.getContext('2d');
@@ -46,6 +49,8 @@ class WebRTCManager {
       ctx.fillText('SLZoom User Stream', 200, 240);
 
       this.localStream = canvas.captureStream(30);
+      this.localVideo.setAttribute('playsinline', 'true');
+      this.localVideo.setAttribute('webkit-playsinline', 'true');
       this.localVideo.srcObject = this.localStream;
       return this.localStream;
     }
@@ -82,7 +87,6 @@ class WebRTCManager {
 
     switch (type) {
       case 'PeerList':
-        // Newly joined user (B) receives existing peers (A). Create tile and send Offer to A!
         if (payload.peers && Array.isArray(payload.peers)) {
           for (const peer of payload.peers) {
             console.log(`[PeerList] Found existing peer ${peer.username} (${peer.user_id}). Initiating Offer.`);
@@ -93,7 +97,6 @@ class WebRTCManager {
         break;
 
       case 'UserJoined':
-        // Existing user (A) receives new user (B) notification. Create tile and wait for B's Offer.
         console.log(`[UserJoined] ${payload.username} (${payload.user_id}) joined. Creating tile & awaiting Offer.`);
         this.ensurePeerTile(payload.user_id, payload.username);
         break;
@@ -136,17 +139,57 @@ class WebRTCManager {
       const remoteVideo = document.createElement('video');
       remoteVideo.id = `video-${peerUserId}`;
       remoteVideo.autoplay = true;
-      remoteVideo.playsInline = true;
+      remoteVideo.setAttribute('playsinline', 'true');
+      remoteVideo.setAttribute('webkit-playsinline', 'true');
 
       const tag = document.createElement('div');
       tag.className = 'speaker-tag';
-      tag.innerText = `${username || '참여자'} (${peerUserId.substring(0, 5)})`;
+      tag.innerHTML = `<span class="peer-status-dot" id="status-${peerUserId}">🔴 연결 중...</span> ${username || '참여자'} (${peerUserId.substring(0, 5)})`;
+
+      const playOverlay = document.createElement('div');
+      playOverlay.className = 'play-overlay hidden';
+      playOverlay.id = `overlay-${peerUserId}`;
+      playOverlay.innerHTML = '<span>▶ 터치하여 비디오 재생</span>';
+      playOverlay.addEventListener('click', () => {
+        remoteVideo.play().then(() => {
+          this.hidePlayOverlay(peerUserId);
+        }).catch(e => console.warn('Manual play failed:', e));
+      });
 
       peerTile.appendChild(remoteVideo);
       peerTile.appendChild(tag);
+      peerTile.appendChild(playOverlay);
       this.videoGrid.appendChild(peerTile);
     }
     return peerTile;
+  }
+
+  updatePeerStatus(peerUserId, statusText) {
+    const statusElem = document.getElementById(`status-${peerUserId}`);
+    if (statusElem) {
+      statusElem.innerText = statusText;
+    }
+  }
+
+  showPlayOverlay(peerUserId) {
+    const overlay = document.getElementById(`overlay-${peerUserId}`);
+    if (overlay) overlay.classList.remove('hidden');
+  }
+
+  hidePlayOverlay(peerUserId) {
+    const overlay = document.getElementById(`overlay-${peerUserId}`);
+    if (overlay) overlay.classList.add('hidden');
+  }
+
+  ensureLocalTracks(pc) {
+    if (!this.localStream) return;
+    const senders = pc.getSenders();
+    this.localStream.getTracks().forEach(track => {
+      const exists = senders.some(s => s.track && s.track.kind === track.kind);
+      if (!exists) {
+        pc.addTrack(track, this.localStream);
+      }
+    });
   }
 
   createPeerConnection(peerUserId) {
@@ -158,12 +201,8 @@ class WebRTCManager {
     this.peerConnections[peerUserId] = pc;
     this.iceCandidateQueues[peerUserId] = [];
 
-    // Add local media tracks
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => {
-        pc.addTrack(track, this.localStream);
-      });
-    }
+    // Ensure local media tracks are attached
+    this.ensureLocalTracks(pc);
 
     // ICE Candidate Handler
     pc.onicecandidate = (event) => {
@@ -184,17 +223,72 @@ class WebRTCManager {
       console.log(`🎥 Remote video track received from ${peerUserId}`, event.streams);
       const peerTile = this.ensurePeerTile(peerUserId, '참여자');
       const remoteVideo = peerTile.querySelector('video');
-      if (remoteVideo) {
+      if (remoteVideo && event.streams[0]) {
         remoteVideo.srcObject = event.streams[0];
-        remoteVideo.play().catch(e => console.warn('Autoplay prevented, retrying:', e));
+        remoteVideo.play().then(() => {
+          this.updatePeerStatus(peerUserId, '🟢 연결됨');
+          this.hidePlayOverlay(peerUserId);
+        }).catch(e => {
+          console.warn('Mobile Autoplay prevented, showing touch play overlay:', e);
+          this.showPlayOverlay(peerUserId);
+        });
+      }
+    };
+
+    // Connection State Change & Auto ICE Restart
+    pc.oniceconnectionstatechange = () => {
+      const state = pc.iceConnectionState;
+      console.log(`ICE Connection State [${peerUserId}]:`, state);
+
+      if (state === 'connected' || state === 'completed') {
+        this.updatePeerStatus(peerUserId, '🟢 연결됨');
+        this.hidePlayOverlay(peerUserId);
+        if (this.iceRestartTimers[peerUserId]) {
+          clearTimeout(this.iceRestartTimers[peerUserId]);
+          delete this.iceRestartTimers[peerUserId];
+        }
+      } else if (state === 'failed' || state === 'disconnected') {
+        this.updatePeerStatus(peerUserId, '🟡 재연결 중...');
+        this.scheduleIceRestart(peerUserId);
       }
     };
 
     return pc;
   }
 
+  scheduleIceRestart(peerUserId) {
+    if (this.iceRestartTimers[peerUserId]) return;
+
+    this.iceRestartTimers[peerUserId] = setTimeout(async () => {
+      console.log(`🔄 Attempting WebRTC ICE Restart for peer ${peerUserId}...`);
+      const pc = this.peerConnections[peerUserId];
+      if (pc) {
+        try {
+          const offer = await pc.createOffer({ iceRestart: true });
+          await pc.setLocalDescription(offer);
+
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+              type: 'Offer',
+              payload: {
+                target_user_id: peerUserId,
+                sdp: JSON.stringify(offer),
+                sender_user_id: this.currentUserId
+              }
+            }));
+          }
+        } catch (e) {
+          console.warn('ICE Restart failed:', e);
+        }
+      }
+      delete this.iceRestartTimers[peerUserId];
+    }, 3000);
+  }
+
   async createOffer(peerUserId) {
     const pc = this.createPeerConnection(peerUserId);
+    this.ensureLocalTracks(pc);
+
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
@@ -212,6 +306,8 @@ class WebRTCManager {
 
   async handleOffer(senderUserId, sdpStr) {
     const pc = this.createPeerConnection(senderUserId);
+    this.ensureLocalTracks(pc);
+
     const offer = JSON.parse(sdpStr);
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
@@ -282,6 +378,10 @@ class WebRTCManager {
       delete this.peerConnections[peerUserId];
     }
     delete this.iceCandidateQueues[peerUserId];
+    if (this.iceRestartTimers[peerUserId]) {
+      clearTimeout(this.iceRestartTimers[peerUserId]);
+      delete this.iceRestartTimers[peerUserId];
+    }
 
     const tile = document.getElementById(`tile-${peerUserId}`);
     if (tile) tile.remove();
