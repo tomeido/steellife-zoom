@@ -14,6 +14,19 @@ pub struct CreateRoomReq {
     pub host_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LiveKitTokenReq {
+    pub room_id: String,
+    pub user_id: String,
+    pub username: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LiveKitTokenResp {
+    pub server_url: String,
+    pub token: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct WebRtcIceServer {
     pub urls: Vec<String>,

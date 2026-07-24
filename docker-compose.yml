@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit-server
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "7882:7882/udp"
+      - "50000-60000:50000-60000/udp"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml
+
+  slzoom:
+    build: .
+    container_name: slzoom-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+    depends_on:
+      - livekit

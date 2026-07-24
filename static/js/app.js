@@ -146,7 +146,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Join Session Logic
-  function joinRoomSession(roomId, roomName) {
+  async function joinRoomSession(roomId, roomName) {
     currentRoomId = roomId;
     currentRoomName = roomName;
     roomCodeDisplay.innerText = `회의 ID: ${roomId}`;
@@ -159,6 +159,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const ws = rtcManager.connectWS(wsUrl, userId, username, roomId, (msg) => {
       handleWsEvent(msg);
     });
+
+    // Connect to LiveKit Self-Hosted SFU Media Server
+    try {
+      await rtcManager.connectLiveKit(roomId, userId, username);
+      console.log('✅ [LiveKit SFU] Media streaming active');
+    } catch (err) {
+      console.error('⚠️ [LiveKit SFU] Connection failed:', err);
+      alert('LiveKit 미디어 서버 연결 오류: ' + err.message);
+    }
 
     // Start Audio Streamer (saves PCM to server WAV for post-meeting WhisperX)
     audioStreamer = new AudioStreamer(ws);
@@ -175,7 +184,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    addTranscriptItem('시스템', `[${roomName}] 회의실 입장. (Rust web-sys WASM 실시간 자막 & 오디오 녹음 중)`, new Date().toLocaleTimeString());
+    addTranscriptItem('시스템', `[${roomName}] LiveKit 셀프호스팅 회의실 입장. (Rust web-sys WASM 자막 & LiveKit SFU 활성화)`, new Date().toLocaleTimeString());
   }
 
   // Handle incoming WebSocket messages
@@ -249,9 +258,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Controls: Mic & Cam & Screen Share
-  btnToggleMic.addEventListener('click', () => {
-    isMicOn = !isMicOn;
-    rtcManager.toggleMic(isMicOn);
+  btnToggleMic.addEventListener('click', async () => {
+    isMicOn = await rtcManager.toggleMic();
     if (wasmRecognizer) {
       if (isMicOn) wasmRecognizer.start();
       else wasmRecognizer.stop();
@@ -260,9 +268,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnToggleMic.style.background = isMicOn ? '' : 'var(--danger)';
   });
 
-  btnToggleCam.addEventListener('click', () => {
-    isCamOn = !isCamOn;
-    rtcManager.toggleCam(isCamOn);
+  btnToggleCam.addEventListener('click', async () => {
+    isCamOn = await rtcManager.toggleCam();
     btnToggleCam.innerText = isCamOn ? '📷' : '🚫';
     btnToggleCam.style.background = isCamOn ? '' : 'var(--danger)';
   });

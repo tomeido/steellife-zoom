@@ -1,5 +1,6 @@
 use crate::{
-    models::{CreateRoomReq, RoomInfo, WebRtcConfig, WebRtcIceServer},
+    livekit::generate_livekit_token,
+    models::{CreateRoomReq, LiveKitTokenReq, LiveKitTokenResp, RoomInfo, WebRtcConfig, WebRtcIceServer},
     state::{AppState, RoomSession},
 };
 use axum::{
@@ -9,6 +10,22 @@ use axum::{
 };
 use std::sync::Arc;
 use uuid::Uuid;
+
+pub async fn get_livekit_token(
+    Json(req): Json<LiveKitTokenReq>,
+) -> Result<Json<LiveKitTokenResp>, (StatusCode, String)> {
+    let api_key = std::env::var("LIVEKIT_API_KEY").unwrap_or_else(|_| "devkey".to_string());
+    let api_secret = std::env::var("LIVEKIT_API_SECRET").unwrap_or_else(|_| "secret".to_string());
+    let server_url = std::env::var("LIVEKIT_URL").unwrap_or_else(|_| "ws://localhost:7880".to_string());
+
+    let token = generate_livekit_token(&api_key, &api_secret, &req.room_id, &req.user_id, &req.username)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to generate LiveKit token: {}", e)))?;
+
+    Ok(Json(LiveKitTokenResp {
+        server_url,
+        token,
+    }))
+}
 
 pub async fn get_webrtc_config() -> Json<WebRtcConfig> {
     let mut ice_servers = vec![WebRtcIceServer {
