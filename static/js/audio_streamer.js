@@ -9,6 +9,10 @@ class AudioStreamer {
 
   async start(stream) {
     try {
+      if (!stream || stream.getAudioTracks().length === 0) {
+        console.warn('AudioStreamer: No audio track available in media stream.');
+        return;
+      }
       this.mediaStream = stream;
       this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: 16000,

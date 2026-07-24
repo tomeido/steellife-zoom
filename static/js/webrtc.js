@@ -4,6 +4,7 @@ class WebRTCManager {
     this.videoGrid = videoGridElem;
     this.localStream = null;
     this.screenStream = null;
+    this.canvasFallbackInterval = null;
     this.peerConnections = {}; // peerUserId -> RTCPeerConnection
     this.iceCandidateQueues = {}; // peerUserId -> Array of candidate
     this.iceRestartTimers = {}; // peerUserId -> timer
@@ -12,8 +13,7 @@ class WebRTCManager {
     this.currentRoomId = null;
     this.screenShareStateHandler = null;
 
-    // STUN is enough for local testing. Production deployments can add TURN
-    // credentials through /api/config/webrtc for networks with restrictive NATs.
+    // STUN configuration fallback
     this.iceServers = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
@@ -41,8 +41,6 @@ class WebRTCManager {
       this.iceServers = { iceServers: config.ice_servers };
       console.info(`[WebRTC] Loaded ${config.ice_servers.length} ICE server configuration(s).`);
     } catch (error) {
-      // Keep the bundled STUN entries so a temporary config endpoint issue does
-      // not prevent same-network calls from starting.
       console.warn('[WebRTC] Could not load server ICE configuration; using STUN fallback.', error);
     }
   }
@@ -57,36 +55,81 @@ class WebRTCManager {
     }
   }
 
+  createCanvasFallbackStream() {
+    if (this.canvasFallbackInterval) {
+      clearInterval(this.canvasFallbackInterval);
+      this.canvasFallbackInterval = null;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+
+    let frameCount = 0;
+    const draw = () => {
+      frameCount++;
+      const grad = ctx.createLinearGradient(0, 0, 640, 360);
+      grad.addColorStop(0, '#0f172a');
+      grad.addColorStop(1, '#1e1b4b');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 640, 360);
+
+      const radius = 40 + Math.sin(frameCount * 0.05) * 5;
+      ctx.beginPath();
+      ctx.arc(320, 140, radius, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(99, 102, 241, 0.25)';
+      ctx.fill();
+
+      ctx.fillStyle = '#818cf8';
+      ctx.font = 'bold 32px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('📷 SLZoom Stream', 320, 150);
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = '15px sans-serif';
+      ctx.fillText('카메라 미연결 / 가상 스트림 활성화', 320, 210);
+
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '13px monospace';
+      ctx.fillText(new Date().toLocaleTimeString(), 320, 250);
+    };
+
+    draw();
+    this.canvasFallbackInterval = setInterval(draw, 1000 / 30);
+    return canvas.captureStream(30);
+  }
+
   async initLocalMedia() {
     try {
+      // First try with resolution preference
       this.localStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: 'user'
-        },
+        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: true
       });
-      this.localVideo.setAttribute('playsinline', 'true');
-      this.localVideo.setAttribute('webkit-playsinline', 'true');
-      this.localVideo.srcObject = this.localStream;
-      return this.localStream;
-    } catch (err) {
-      console.warn('Camera/Mic permission denied or not available:', err);
-      // Canvas fallback for environments without camera access
-      const canvas = document.createElement('canvas');
-      canvas.width = 640; canvas.height = 480;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#1e293b'; ctx.fillRect(0, 0, 640, 480);
-      ctx.fillStyle = '#6366f1'; ctx.font = '24px sans-serif';
-      ctx.fillText('SLZoom User Stream', 200, 240);
-
-      this.localStream = canvas.captureStream(30);
-      this.localVideo.setAttribute('playsinline', 'true');
-      this.localVideo.setAttribute('webkit-playsinline', 'true');
-      this.localVideo.srcObject = this.localStream;
-      return this.localStream;
+    } catch (e1) {
+      console.warn('[WebRTC] Constrained getUserMedia failed, retrying simple getUserMedia...', e1);
+      try {
+        this.localStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: true
+        });
+      } catch (err) {
+        console.warn('[WebRTC] Camera/Mic access denied or unavailable. Activating canvas fallback stream:', err);
+        this.localStream = this.createCanvasFallbackStream();
+      }
     }
+
+    if (this.localVideo && this.localStream) {
+      this.localVideo.setAttribute('playsinline', 'true');
+      this.localVideo.setAttribute('webkit-playsinline', 'true');
+      this.localVideo.muted = true;
+      this.localVideo.style.transform = 'scaleX(-1)';
+      this.localVideo.srcObject = this.localStream;
+      this.localVideo.play().catch(err => console.warn('[WebRTC] Local video play error:', err));
+    }
+
+    return this.localStream;
   }
 
   connectWS(wsUrl, userId, username, roomId, onMessageCallback) {
@@ -122,7 +165,7 @@ class WebRTCManager {
       case 'PeerList':
         if (payload.peers && Array.isArray(payload.peers)) {
           for (const peer of payload.peers) {
-            console.log(`[PeerList] Found existing peer ${peer.username} (${peer.user_id}). Initiating Offer.`);
+            console.log(`[PeerList] Existing peer found: ${peer.username} (${peer.user_id}). Initiating Offer.`);
             this.ensurePeerTile(peer.user_id, peer.username);
             await this.createOffer(peer.user_id);
           }
@@ -130,7 +173,7 @@ class WebRTCManager {
         break;
 
       case 'UserJoined':
-        console.log(`[UserJoined] ${payload.username} (${payload.user_id}) joined. Creating tile & awaiting Offer.`);
+        console.log(`[UserJoined] New peer joined: ${payload.username} (${payload.user_id}). Creating tile & awaiting Offer.`);
         this.ensurePeerTile(payload.user_id, payload.username);
         break;
 
@@ -144,7 +187,7 @@ class WebRTCManager {
 
       case 'Answer':
         if (payload.target_user_id === this.currentUserId) {
-          console.log(`[Answer Received] From ${payload.sender_user_id}. Set remote description.`);
+          console.log(`[Answer Received] From ${payload.sender_user_id}. Setting Remote Description.`);
           await this.handleAnswer(payload.sender_user_id, payload.sdp);
         }
         break;
@@ -177,7 +220,7 @@ class WebRTCManager {
 
       const tag = document.createElement('div');
       tag.className = 'speaker-tag';
-      tag.innerHTML = `<span class="peer-status-dot" id="status-${peerUserId}">🔴 연결 중...</span> ${username || '참여자'} (${peerUserId.substring(0, 5)})`;
+      tag.innerHTML = `<span class="peer-status-dot" id="status-${peerUserId}">🔴 연결 중...</span> <span id="name-${peerUserId}">${username || '참여자'}</span> (${peerUserId.substring(0, 5)})`;
 
       const playOverlay = document.createElement('div');
       playOverlay.className = 'play-overlay hidden';
@@ -193,6 +236,11 @@ class WebRTCManager {
       peerTile.appendChild(tag);
       peerTile.appendChild(playOverlay);
       this.videoGrid.appendChild(peerTile);
+    } else if (username && username !== '참여자') {
+      const nameElem = document.getElementById(`name-${peerUserId}`);
+      if (nameElem && nameElem.innerText !== username) {
+        nameElem.innerText = username;
+      }
     }
     return peerTile;
   }
@@ -257,18 +305,30 @@ class WebRTCManager {
       }
     };
 
-    // Remote Stream Handler
+    // Remote Track Handler (Supports MediaStream or single track stream creation)
     pc.ontrack = (event) => {
-      console.log(`🎥 Remote video track received from ${peerUserId}`, event.streams);
-      const peerTile = this.ensurePeerTile(peerUserId, '참여자');
+      console.log(`🎥 Remote track [${event.track.kind}] received from ${peerUserId}`, event.streams);
+      const peerTile = this.ensurePeerTile(peerUserId);
       const remoteVideo = peerTile.querySelector('video');
-      if (remoteVideo && event.streams[0]) {
-        remoteVideo.srcObject = event.streams[0];
+      if (remoteVideo) {
+        let stream = (event.streams && event.streams[0]) ? event.streams[0] : null;
+        if (!stream) {
+          if (!remoteVideo.srcObject) {
+            remoteVideo.srcObject = new MediaStream();
+          }
+          stream = remoteVideo.srcObject;
+          if (!stream.getTracks().some(t => t.id === event.track.id)) {
+            stream.addTrack(event.track);
+          }
+        } else {
+          remoteVideo.srcObject = stream;
+        }
+
         remoteVideo.play().then(() => {
           this.updatePeerStatus(peerUserId, '🟢 연결됨');
           this.hidePlayOverlay(peerUserId);
         }).catch(e => {
-          console.warn('Mobile Autoplay prevented, showing touch play overlay:', e);
+          console.warn('Autoplay prevented, showing touch play overlay:', e);
           this.showPlayOverlay(peerUserId);
         });
       }
@@ -328,18 +388,22 @@ class WebRTCManager {
     const pc = this.createPeerConnection(peerUserId);
     this.ensureLocalTracks(pc);
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
 
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({
-        type: 'Offer',
-        payload: {
-          target_user_id: peerUserId,
-          sdp: JSON.stringify(offer),
-          sender_user_id: this.currentUserId
-        }
-      }));
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          type: 'Offer',
+          payload: {
+            target_user_id: peerUserId,
+            sdp: JSON.stringify(offer),
+            sender_user_id: this.currentUserId
+          }
+        }));
+      }
+    } catch (e) {
+      console.error(`[WebRTC] Failed to create offer for ${peerUserId}:`, e);
     }
   }
 
@@ -347,38 +411,47 @@ class WebRTCManager {
     const pc = this.createPeerConnection(senderUserId);
     this.ensureLocalTracks(pc);
 
-    const offer = JSON.parse(sdpStr);
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    try {
+      const offer = JSON.parse(sdpStr);
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
-    // Process buffered ICE candidates
-    await this.flushIceCandidates(senderUserId);
+      // Process buffered ICE candidates
+      await this.flushIceCandidates(senderUserId);
 
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
 
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({
-        type: 'Answer',
-        payload: {
-          target_user_id: senderUserId,
-          sdp: JSON.stringify(answer),
-          sender_user_id: this.currentUserId
-        }
-      }));
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({
+          type: 'Answer',
+          payload: {
+            target_user_id: senderUserId,
+            sdp: JSON.stringify(answer),
+            sender_user_id: this.currentUserId
+          }
+        }));
+      }
+    } catch (e) {
+      console.error(`[WebRTC] Failed to handle offer from ${senderUserId}:`, e);
     }
   }
 
   async handleAnswer(senderUserId, sdpStr) {
     const pc = this.peerConnections[senderUserId];
     if (pc) {
-      const answer = JSON.parse(sdpStr);
-      await pc.setRemoteDescription(new RTCSessionDescription(answer));
-      await this.flushIceCandidates(senderUserId);
+      try {
+        const answer = JSON.parse(sdpStr);
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        await this.flushIceCandidates(senderUserId);
+      } catch (e) {
+        console.error(`[WebRTC] Failed to handle answer from ${senderUserId}:`, e);
+      }
     }
   }
 
   async handleIceCandidate(senderUserId, candidateStr) {
     const pc = this.peerConnections[senderUserId];
+    if (!candidateStr) return;
     const candidate = new RTCIceCandidate(JSON.parse(candidateStr));
 
     if (pc && pc.remoteDescription && pc.remoteDescription.type) {
@@ -450,8 +523,6 @@ class WebRTCManager {
 
       const sender = pc.getSenders().find(candidate => candidate.track?.kind === 'video');
       if (!sender) {
-        // Every normal connection has a camera sender. This fallback handles a
-        // peer created while media was still initializing.
         pc.addTrack(videoTrack, stream);
         await this.createOffer(peerUserId);
         return;
@@ -460,19 +531,13 @@ class WebRTCManager {
       await sender.replaceTrack(videoTrack);
     });
 
-    const results = await Promise.allSettled(replacements);
-    results.forEach((result, index) => {
-      if (result.status === 'rejected') {
-        console.warn(`[WebRTC] Failed to switch the video track for ${peers[index][0]}.`, result.reason);
-      }
-    });
+    await Promise.allSettled(replacements);
   }
 
   async stopScreenShare() {
     const stream = this.screenStream;
     if (!stream) return false;
 
-    // Clear first because stopping display tracks emits an "ended" event.
     this.screenStream = null;
     stream.getTracks().forEach(track => track.stop());
 
@@ -482,7 +547,11 @@ class WebRTCManager {
       console.error('[WebRTC] Failed to restore the camera after screen sharing.', error);
     }
 
-    this.localVideo.srcObject = this.localStream;
+    if (this.localVideo && this.localStream) {
+      this.localVideo.style.transform = 'scaleX(-1)';
+      this.localVideo.srcObject = this.localStream;
+      this.localVideo.play().catch(e => console.warn(e));
+    }
     this.notifyScreenShareState(false);
     return false;
   }
@@ -493,7 +562,7 @@ class WebRTCManager {
     }
 
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      console.warn('Screen sharing requires a secure (HTTPS) browser context.');
+      alert('현재 브라우저 환경에서는 화면 공유(getDisplayMedia)를 지원하지 않습니다.');
       return false;
     }
 
@@ -505,7 +574,7 @@ class WebRTCManager {
       const videoTrack = stream.getVideoTracks()[0];
       if (!videoTrack) {
         stream.getTracks().forEach(track => track.stop());
-        throw new Error('No display video track was selected');
+        throw new Error('선택된 화면 공유 비디오 트랙이 없습니다.');
       }
 
       this.screenStream = stream;
@@ -516,7 +585,11 @@ class WebRTCManager {
       }, { once: true });
 
       await this.replaceOutgoingVideoTrack(stream);
-      this.localVideo.srcObject = stream;
+      if (this.localVideo) {
+        this.localVideo.style.transform = 'none';
+        this.localVideo.srcObject = stream;
+        this.localVideo.play().catch(e => console.warn(e));
+      }
       this.notifyScreenShareState(true);
       return true;
     } catch (error) {
