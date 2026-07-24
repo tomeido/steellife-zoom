@@ -23,7 +23,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnToggleMic = document.getElementById('btn-toggle-mic');
   const btnToggleCam = document.getElementById('btn-toggle-cam');
   const btnScreenShare = document.getElementById('btn-screen-share');
+  const btnToggleChat = document.getElementById('btn-toggle-chat');
   const btnLeaveRoom = document.getElementById('btn-leave-room');
+  const sidebar = document.getElementById('sidebar');
+
+  // Mobile sidebar toggle
+  if (btnToggleChat) {
+    btnToggleChat.addEventListener('click', () => {
+      sidebar.classList.toggle('hidden-mobile');
+    });
+  }
 
   const panelTranscript = document.getElementById('panel-transcript');
   const panelChat = document.getElementById('panel-chat');
